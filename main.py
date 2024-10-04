@@ -50,7 +50,11 @@ class FlipdotDisplay:
         self.p4_pulse.on()
         utime.sleep_us(600)
         self.p4_pulse.off()
-        
+    
+    def clear_buffer(self):
+        #reinitialize buffer to a blank bit array
+        for i in range(len(self.buffer)):
+            self.buffer[i] = 0x00
 
     def clear(self):
         self.reset()
@@ -61,7 +65,7 @@ class FlipdotDisplay:
                 self.advance_row()    
             self.advance_column()
 
-    def set_bit(self, x,y,value):
+    def _set_bit(self, x,y,value):
         print(f"x:{self.x_pos} y:{self.y_pos}")
         
         while self.x_pos != x:
@@ -91,7 +95,7 @@ class FlipdotDisplay:
                 # Only update the bit if it's changing, compare to the previous buffer
                 if old_bit != bit:
                     bit = bit != 0
-                    print(f"Updating {x},{y} to {bit}")
+                    # print(f"Updating {x},{y} to {bit}")
                     if bit:
                         self.p2_set_unset.on()
                     else:
@@ -104,27 +108,123 @@ class FlipdotDisplay:
                 else:
                     self.advance_row()
         self._old_buffer[:] = self.buffer
-                
+
+    def get_byte_num(self, x, y):
+        return (x * 2) + (y//8)
+
+    def set_bit(self, x, y, value):
+        byte_num = self.get_byte_num(x,y)
+        bit_num = y % 8
+        bit_mask = (1 << bit_num)
+        if value:
+            self.buffer[byte_num] = self.buffer[byte_num] | bit_mask
+        else:
+            self.buffer[byte_num] = self.buffer[byte_num] & ~bit_mask
+
+                    
 
     def draw_rect(x,y,height,width,bit):
         # TODO: draw a rectangle to the buffer
         pass
 
+class Ball:
+    def __init__(self, display) -> None:
+        self.x = display.width // 2
+        self.y = display.height // 2
+        self.x_speed = -1
+        self.y_speed = 1
+        self.display = display
+    
+    def update(self):
+        self.x += self.x_speed
+        self.y += self.y_speed
+
+        if self.x <= 0 or self.x >= self.display.width - 1:
+            self.x_speed = -1 * self.x_speed
+        if self.y <= 0 or self.y >= self.display.height - 1:
+            self.y_speed = -1 * self.y_speed
+
+    def draw(self):
+        self.display.set_bit(self.x, self.y, 1)
+
+class Paddle:
+    def __init__(self, x, display:FlipdotDisplay) -> None:
+        self.height = 4
+        self.x = x
+        self.y = (display.height // 2) - (self.height // 2)
+        self.speed = 1
+        self.display = display
+
+    def update(self, ball:Ball):
+
+        if abs(ball.x - self.x) > 10:
+            return
+
+        if ball.y < self.y:
+            self.y -= self.speed
+        if ball.y > self.y + self.height:
+            self.y += self.speed
+
+        if self.y < 0:
+            self.y = 0
+        if self.y + self.height > self.display.height:
+            self.y = self.display.height - self.height
+
+    def draw(self):
+        for i in range(self.height):
+            self.display.set_bit(self.x, self.y + i, 1)
+
+
+class Pong:
+
+    def __init__(self, display:FlipdotDisplay) -> None:
+        self.display = display
+        self.ball = Ball(display)      
+        self.paddle_1 = Paddle(0, display)
+        self.paddle_2 = Paddle(display.width - 1, display)  
+
+    def update(self):
+
+        #move ball
+        self.ball.update()
+        self.paddle_1.update(self.ball)
+        self.paddle_2.update(self.ball)
+
+        #Check conditions
+
+        #draw to display
+        self.ball.draw()
+        self.paddle_1.draw()
+        self.paddle_2.draw()
+
 def main():
     display = FlipdotDisplay()
-    # for n in range(100):
-    #     utime.sleep_ms(1000)
-    #     display.clear()
-    #     utime.sleep_ms(500)
-    #     for i in range(32):
-    #         display.set_bit(i,((i//2) + n )%16,1)
+
     display.clear()
-    for n in range(200):
-        
-        display.buffer[(n-1) % len(display.buffer)] = 0x28
-        display.buffer[n % len(display.buffer)] = 0xF7
+    frame_num = 0
+
+    game = Pong(display)
+
+    while True:
+
+        display.clear_buffer()
+
+        #draw the middle line
+
+        mid = display.width // 2
+
+
+        for i in range(display.height):
+            display.set_bit(mid, i, 1)
+
+
+        game.update()
+
         display.flip()
-        # utime.sleep_ms(100)
+        
+        utime.sleep_ms(20)
+        frame_num += 1
+
 
 main()
 
