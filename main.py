@@ -22,11 +22,6 @@ class FlipdotDisplay:
         self.pin_e2 = machine.Pin(7, machine.Pin.OUT, machine.Pin.PULL_DOWN)
         self.pin_e3 = machine.Pin(8, machine.Pin.OUT, machine.Pin.PULL_DOWN)
         self.pin_e4 = machine.Pin(9, machine.Pin.OUT, machine.Pin.PULL_DOWN)
-
-        self.pin_e1.off()
-        self.pin_e2.off()
-        self.pin_e3.off()
-        self.pin_e4.off()
         
         self.panel_pins = [
             self.pin_e1,
@@ -34,6 +29,8 @@ class FlipdotDisplay:
             self.pin_e3,
             self.pin_e4,
         ]
+        
+        self.disable_all_panels()
 
         self.x_pos = 0
         self.y_pos = 0
@@ -62,15 +59,23 @@ class FlipdotDisplay:
         for panel_pin in self.panel_pins:
             panel_pin.off()
 
+    def enable_single_panel(self, panel):
+        for i, panel_pin in enumerate(self.panel_pins):
+            if i == panel:
+                panel_pin.on()
+            else:
+                panel_pin.off()
+
     def reset(self):
         self.x_pos = 0
         self.y_pos = 0
         
-        self.enable_all_panels()
+        #self.enable_all_panels()
         
         self.pin_reset.on()
-        utime.sleep_us(1)
         self.pin_reset.off()
+        
+        #self.disable_all_panels()
         
 
     def advance_column(self):
@@ -78,22 +83,20 @@ class FlipdotDisplay:
         self.y_pos = 0
         self.x_pos = (self.x_pos + 1) % self.panel_width
         self.pin_col.on()
-        utime.sleep_us(1)
         self.pin_col.off()
-        
 
     def advance_row(self):
         self.y_pos = (self.y_pos + 1) % self.panel_height
         self.pin_row.on()
-        utime.sleep_us(1)
         self.pin_row.off()
         
     def _pulse(self):
         self.pin_pulse.on()
-        utime.sleep_us(300)
+        utime.sleep_us(250)
         self.pin_pulse.off()
         
     def pulse_bit(self, bit):
+        
         if bit:
             self.pin_set_unset.on()
         else:
@@ -169,45 +172,63 @@ class FlipdotDisplay:
         
     
     def flip_panel(self, panel):
-        self.reset()
-        i = 0
         
-        self.disable_all_panels()
-        self.panel_pins[panel].on()
-        
-        for byte_index in range(self.bytes_per_panel):
-            
-            pannel_offset = panel * self.bytes_per_panel
-            old_byte = self._old_buffer[byte_index + pannel_offset]
-            new_byte = self.buffer[byte_index + pannel_offset]
-            
-            for bit_num in range(8):
-                
-                bit_mask = (1 << bit_num)
-                old_bit = bit_mask & old_byte
-                new_bit = bit_mask & new_byte
-                
-                x = i // 16
-                y = i % 16
-
-                # Only update the bit if it's changing, compare to the previous buffer
-                if old_bit != new_bit:
-                    bit = new_bit != 0
-                    # print(f"Updating {x},{y} to {bit}")
-                    self.pulse_bit(bit)
-                
-                i += 1
-                if i % self.panel_height == 0:
-                    #Advancing the column will advance the row as well
-                    self.advance_column()
-                else:
-                    self.advance_row()
-                    
-    def flip(self):
         # Always reset to the origin before flipping
         self.reset()
         i = 0
         
+        self.enable_single_panel(panel)
+        
+        for byte_index in range(self.bytes_per_panel//2):
+            pannel_offset = panel * self.bytes_per_panel
+            b0 = (byte_index * 2) + pannel_offset
+            b1 = b0 + 1
+            
+            old_bytes = [self._old_buffer[b0], self._old_buffer[b1]]
+            new_bytes = [self.buffer[b0], self.buffer[b1]]
+            
+            if old_bytes == new_bytes:
+                i += 16
+                self.advance_column()
+                continue
+            
+            for b_index in range(2):
+                old_byte = old_bytes[b_index]
+                new_byte = new_bytes[b_index]
+                
+                if old_byte == new_byte:
+                    i += 8
+                    if i % self.panel_height == 0:
+                        #Advancing the column will advance the row as well
+                        self.advance_column()
+                    else:
+                        for j in range(8):
+                            self.advance_row()
+                    continue
+                
+                for bit_num in range(8):
+                    
+                    bit_mask = (1 << bit_num)
+                    old_bit = bit_mask & old_byte
+                    new_bit = bit_mask & new_byte
+                    
+                    x = i // 16
+                    y = i % 16
+
+                    # Only update the bit if it's changing, compare to the previous buffer
+                    if old_bit != new_bit:
+                        bit = new_bit != 0
+                        # print(f"Updating {x},{y} to {bit}")
+                        self.pulse_bit(bit)
+                    
+                    i += 1
+                    if i % self.panel_height == 0:
+                        #Advancing the column will advance the row as well
+                        self.advance_column()
+                    else:
+                        self.advance_row()
+                    
+    def flip(self):
         for panel in range(self.panel_count):
             self.flip_panel(panel)
             
@@ -217,16 +238,13 @@ class FlipdotDisplay:
         return (x * 2) + (y//8)
 
     def set_bit(self, x, y, value):
-        
         byte_num = self.get_byte_num(x,y)       
-        
         bit_num = y % 8
         bit_mask = (1 << bit_num)
         if value:
             self.buffer[byte_num] = self.buffer[byte_num] | bit_mask
         else:
             self.buffer[byte_num] = self.buffer[byte_num] & ~bit_mask
-
                     
 
     def draw_rect(x,y,height,width,bit):
@@ -329,7 +347,7 @@ def main():
 
         display.flip()
         
-        #utime.sleep_ms(2)
+        utime.sleep_ms(10)
         frame_num += 1
 
 
