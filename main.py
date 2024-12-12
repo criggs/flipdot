@@ -5,65 +5,120 @@ import utime
 class FlipdotDisplay:
 
     def __init__(self) -> None:
-        self.p0_col = machine.Pin(0, machine.Pin.OUT)
-        self.p1_row = machine.Pin(1, machine.Pin.OUT)
-        self.p2_set_unset = machine.Pin(2, machine.Pin.OUT)
-        self.p3_reset = machine.Pin(3, machine.Pin.OUT)
-        self.p4_pulse = machine.Pin(5, machine.Pin.OUT)
+        self.led = machine.Pin(25, machine.Pin.OUT)
+        
+        self.pin_col = machine.Pin(0, machine.Pin.OUT, machine.Pin.PULL_DOWN)
+        self.pin_row = machine.Pin(1, machine.Pin.OUT, machine.Pin.PULL_DOWN)
+        
+        self.pin_set_unset = machine.Pin(2, machine.Pin.OUT, machine.Pin.PULL_DOWN)
+        self.pin_reset = machine.Pin(3, machine.Pin.OUT, machine.Pin.PULL_DOWN)
+        
+        #Why skip p4? Who knows....
+        
+        self.pin_pulse = machine.Pin(5, machine.Pin.OUT, machine.Pin.PULL_DOWN)
+        
+        #Enable pins
+        self.pin_e1 = machine.Pin(6, machine.Pin.OUT, machine.Pin.PULL_DOWN)
+        self.pin_e2 = machine.Pin(7, machine.Pin.OUT, machine.Pin.PULL_DOWN)
+        self.pin_e3 = machine.Pin(8, machine.Pin.OUT, machine.Pin.PULL_DOWN)
+        self.pin_e4 = machine.Pin(9, machine.Pin.OUT, machine.Pin.PULL_DOWN)
+
+        self.pin_e1.off()
+        self.pin_e2.off()
+        self.pin_e3.off()
+        self.pin_e4.off()
+        
+        self.panel_pins = [
+            self.pin_e1,
+            self.pin_e2,
+            self.pin_e3,
+            self.pin_e4,
+        ]
 
         self.x_pos = 0
         self.y_pos = 0
 
-        self.height = 16
-        self.width = 32
-        self.buffer = bytearray((self.height * self.width)//8)
-        self._old_buffer = bytearray((self.height * self.width)//8)
+        self.panel_height = 16
+        self.panel_width = 32
+        
+        self.panel_count = 2
+        
+        self.bytes_per_panel = (self.panel_height * self.panel_width)//8
+
+        self.height = self.panel_height
+        self.width = self.panel_count * self.panel_width
+        
+        self.buffer = bytearray(self.bytes_per_panel * self.panel_count)
+        self._old_buffer = bytearray(self.bytes_per_panel * self.panel_count)
 
     def toggle_set_unset(self):
-        self.p2_set_unset.toggle()
+        self.pin_set_unset.toggle()
         
+    def enable_all_panels(self):
+        for panel_pin in self.panel_pins:
+            panel_pin.on()
+            
+    def disable_all_panels(self):
+        for panel_pin in self.panel_pins:
+            panel_pin.off()
 
     def reset(self):
         self.x_pos = 0
         self.y_pos = 0
-        self.p3_reset.on()
-        self.p3_reset.off()
+        
+        self.enable_all_panels()
+        
+        self.pin_reset.on()
+        utime.sleep_us(1)
+        self.pin_reset.off()
         
 
     def advance_column(self):
         #Reset row position back to 0
         self.y_pos = 0
-        self.x_pos = (self.x_pos + 1) % self.width
-        self.p0_col.on()
+        self.x_pos = (self.x_pos + 1) % self.panel_width
+        self.pin_col.on()
         utime.sleep_us(1)
-        self.p0_col.off()
+        self.pin_col.off()
         
 
     def advance_row(self):
-        self.y_pos = (self.y_pos + 1) % self.height
-        self.p1_row.on()
+        self.y_pos = (self.y_pos + 1) % self.panel_height
+        self.pin_row.on()
         utime.sleep_us(1)
-        self.p1_row.off()
+        self.pin_row.off()
         
-
-    def pulse(self):
-        self.p4_pulse.on()
-        utime.sleep_us(600)
-        self.p4_pulse.off()
+    def _pulse(self):
+        self.pin_pulse.on()
+        utime.sleep_us(300)
+        self.pin_pulse.off()
+        
+    def pulse_bit(self, bit):
+        if bit:
+            self.pin_set_unset.on()
+        else:
+            self.pin_set_unset.off()
+        self._pulse()
     
     def clear_buffer(self):
         #reinitialize buffer to a blank bit array
         for i in range(len(self.buffer)):
             self.buffer[i] = 0x00
 
-    def clear(self):
+    def _set_all(self, bit):
         self.reset()
-        self.p2_set_unset.off()
-        for i in range(self.width):
-            for j in range(self.height):
-                self.pulse()
+        self.enable_all_panels()
+        for i in range(self.panel_width):
+            for j in range(self.panel_height):
+                self.pulse_bit(bit)
                 self.advance_row()    
             self.advance_column()
+
+    def clear(self):
+        self._set_all(0)
+
+    def fill(self):
+        self._set_all(1)
 
     def _set_bit(self, x,y,value):
         print(f"x:{self.x_pos} y:{self.y_pos}")
@@ -73,47 +128,98 @@ class FlipdotDisplay:
         
         while self.y_pos != y:
             self.advance_row()
-        if value:
-            self.p2_set_unset.on()
-        else:
-            self.p2_set_unset.off()
-        self.pulse()
+        self.pulse_bit(value)
 
-    def flip(self):
-        # Always reset to the origin before flipping
+
+    def pulse_panels(self, panels, bit):
+        if len(panels) == 0:
+            return
+        
+        if bit:
+            self.pin_set_unset.on()
+        else:
+            self.pin_set_unset.off()
+        
+        self.disable_all_panels()
+        
+        print(f"set bit:{bit} panels:{panels}")
+        for panel in panels:
+            self.panel_pins[panel].on()
+        
+        self.pulse_bit(bit)
+        
+    def get_bit_changes_by_panel(self, old_panel_byte_array, new_panel_byte_array, bit_num):
+        panels_on = []
+        panels_off = []
+        
+        bit_mask = (1 << bit_num)
+        
+        for panel_index in range(len(old_panel_byte_array)):
+            old_bit = bit_mask & old_panel_byte_array[panel_index]
+            bit = bit_mask & new_panel_byte_array[panel_index]
+            
+            if old_bit != bit:
+                bit = bit != 0
+                if bit:
+                    panels_on.append(panel_index)
+                else:
+                    panels_off.append(panel_index)
+        
+        return (panels_on, panels_off)
+        
+    
+    def flip_panel(self, panel):
         self.reset()
         i = 0
-        for byte_index, b in enumerate(self.buffer):
+        
+        self.disable_all_panels()
+        self.panel_pins[panel].on()
+        
+        for byte_index in range(self.bytes_per_panel):
+            
+            pannel_offset = panel * self.bytes_per_panel
+            old_byte = self._old_buffer[byte_index + pannel_offset]
+            new_byte = self.buffer[byte_index + pannel_offset]
+            
             for bit_num in range(8):
+                
                 bit_mask = (1 << bit_num)
-                old_bit = bit_mask & self._old_buffer[byte_index]
-                bit = bit_mask & b
+                old_bit = bit_mask & old_byte
+                new_bit = bit_mask & new_byte
                 
                 x = i // 16
                 y = i % 16
 
                 # Only update the bit if it's changing, compare to the previous buffer
-                if old_bit != bit:
-                    bit = bit != 0
+                if old_bit != new_bit:
+                    bit = new_bit != 0
                     # print(f"Updating {x},{y} to {bit}")
-                    if bit:
-                        self.p2_set_unset.on()
-                    else:
-                        self.p2_set_unset.off()
-                    self.pulse()
+                    self.pulse_bit(bit)
+                
                 i += 1
-                if i % self.height == 0:
+                if i % self.panel_height == 0:
                     #Advancing the column will advance the row as well
                     self.advance_column()
                 else:
                     self.advance_row()
+                    
+    def flip(self):
+        # Always reset to the origin before flipping
+        self.reset()
+        i = 0
+        
+        for panel in range(self.panel_count):
+            self.flip_panel(panel)
+            
         self._old_buffer[:] = self.buffer
 
     def get_byte_num(self, x, y):
         return (x * 2) + (y//8)
 
     def set_bit(self, x, y, value):
-        byte_num = self.get_byte_num(x,y)
+        
+        byte_num = self.get_byte_num(x,y)       
+        
         bit_num = y % 8
         bit_mask = (1 << bit_num)
         if value:
@@ -151,7 +257,7 @@ class Paddle:
     def __init__(self, x, display:FlipdotDisplay) -> None:
         self.height = 4
         self.x = x
-        self.y = (display.height // 2) - (self.height // 2)
+        self.y = 0
         self.speed = 1
         self.display = display
 
@@ -201,30 +307,32 @@ def main():
     display = FlipdotDisplay()
 
     display.clear()
+    display.fill()
+    display.clear()
+    
     frame_num = 0
 
     game = Pong(display)
 
     while True:
 
+        display.led.toggle()
+
         display.clear_buffer()
 
         #draw the middle line
-
         mid = display.width // 2
-
-
         for i in range(display.height):
             display.set_bit(mid, i, 1)
-
 
         game.update()
 
         display.flip()
         
-        utime.sleep_ms(20)
+        #utime.sleep_ms(2)
         frame_num += 1
 
 
 main()
+
 
